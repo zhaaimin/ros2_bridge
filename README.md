@@ -88,6 +88,35 @@ async def greet(params: dict, adapter) -> Any:
 
 遵循 JSON-RPC 2.0 over WebSocket，详见 `docs/JSON-RPC协议设计.md`。
 
+## 默认推送
+
+- 桥启动后会默认订阅 `/emb/battery_state`
+- 收到 `emb_task_msgs/msg/BatteryState` 后，会向所有在线 WebSocket 连接广播 `battery_state.data` 通知
+
+**通知示例：**
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "battery_state.data",
+  "params": {
+    "topic": "/emb/battery_state",
+    "batteries_states": [
+      {
+        "charge_status": "charging",
+        "voltage": 52.1,
+        "current": 3.2,
+        "temperature": 31.5,
+        "maxdifvol": 0.04,
+        "batsoc": 76.0,
+        "remainchargetime": 18.0,
+        "healthstatus": 0,
+        "remainuselife": 420.0
+      }
+    ]
+  }
+}
+```
+
 **请求示例：**
 ```json
 {"jsonrpc": "2.0", "id": 1, "method": "robotinfo.get_info", "params": {"client": "app"}}

@@ -56,6 +56,15 @@ class BridgeServer:
         except Exception:
             logger.debug("Failed to push to %s", websocket.remote_address)
 
+    async def broadcast(self, data: dict) -> None:
+        """向所有在线 WebSocket 连接广播 JSON-RPC notification。"""
+        if not self._connections:
+            return
+        await asyncio.gather(
+            *(self.push_to(websocket, data) for websocket in tuple(self._connections)),
+            return_exceptions=True,
+        )
+
     async def _process(self, raw: str, websocket: WebSocketServerProtocol) -> JsonRpcResponse:
         try:
             data = json.loads(raw)
