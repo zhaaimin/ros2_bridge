@@ -138,7 +138,7 @@ class Ros2Adapter:
         msg_type: Type,
         topic_name: str,
         callback: Callable[[Any], None],
-        qos_depth: int = 10,
+        qos_profile: Any = 10,
     ) -> None:
         """订阅 ROS2 topic，每收到一条消息就调用 *callback*。
 
@@ -147,7 +147,7 @@ class Ros2Adapter:
         """
         if topic_name in self._subscriptions:
             return
-        sub = self.node.create_subscription(msg_type, topic_name, callback, qos_depth)
+        sub = self.node.create_subscription(msg_type, topic_name, callback, qos_profile)
         self._subscriptions[topic_name] = sub
 
     def unsubscribe_topic(self, topic_name: str) -> None:
