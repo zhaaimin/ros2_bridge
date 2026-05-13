@@ -92,8 +92,12 @@ async def greet(params: dict, adapter) -> Any:
 
 - 桥启动后会默认订阅 `/emb/battery_state`
 - 收到 `emb_task_msgs/msg/BatteryState` 后，会向所有在线 WebSocket 连接广播 `battery_state.data` 通知
+- 桥启动后会默认订阅 `/sys/speech/mic_denoise`
+- 收到 `std_msgs/msg/Int16MultiArray` 后，会向所有在线 WebSocket 连接广播 `mic.data` 通知
+- 首次收到 `/sys/speech/mic_denoise` 数据后，会延迟 10 秒自动开始录音，并在 25 秒后自动停止
+- 自动录音文件保存到 `recordings/`，格式为 16kHz、单通道、int16 PCM WAV
 
-**通知示例：**
+**电池通知示例：**
 ```json
 {
   "jsonrpc": "2.0",
@@ -115,6 +119,328 @@ async def greet(params: dict, adapter) -> Any:
     ]
   }
 }
+```
+
+**麦克风通知示例：**
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "mic.data",
+  "params": {
+    "topic": "/sys/speech/mic_denoise",
+    "layout": {
+      "dim": [],
+      "data_offset": 0
+    },
+    "data": [0, -2, 3, 1]
+  }
+}
+```
+
+## 动作播放协议
+
+### 获取动作列表
+
+请求：
+```json
+{"jsonrpc": "2.0", "id": 101, "method": "action.list", "params": {}}
+```
+
+成功响应：
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 101,
+  "result": {
+    "list": [
+      {"id": "wave_hand", "name": "挥手"}
+    ]
+  }
+}
+```
+
+### 播放动作
+
+请求：
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 102,
+  "method": "action.play",
+  "params": {
+    "action_id": "wave_hand",
+    "params": {},
+    "trace_id": "trace-001"
+  }
+}
+```
+
+成功响应：
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 102,
+  "result": {
+    "trace_id": "trace-001",
+    "type": "success",
+    "start_utc_ms": 1710000000000,
+    "end_utc_ms": 1710000003000,
+    "succ_result": null,
+    "fail_reason": null
+  }
+}
+```
+
+### 停止动作
+
+请求：
+```json
+{"jsonrpc": "2.0", "id": 103, "method": "action.stop", "params": {"trace_id": "trace-001"}}
+```
+
+成功响应：
+```json
+{"jsonrpc": "2.0", "id": 103, "result": "accept"}
+```
+
+> `action.*` 当前 handler 中仍需填入实际 ROS2 service/action 类型后才能调用底层动作服务。
+
+## 麦克风协议
+
+### 默认监听
+
+服务启动后会默认监听降噪麦克风话题：
+
+```text
+/sys/speech/mic_denoise
+```
+
+数据格式：
+
+| 字段 | 值 |
+|---|---|
+| ROS2 message | `std_msgs/msg/Int16MultiArray` |
+| JSON-RPC notification | `mic.data` |
+| 采样率 | 16000 Hz |
+| 通道数 | 1 |
+| 采样格式 | int16 PCM |
+
+### 手动订阅麦克风数据
+
+请求：
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 201,
+  "method": "mic.subscribe",
+  "params": {
+    "topic": "/sys/speech/mic_denoise"
+  }
+}
+```
+
+成功响应：
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 201,
+  "result": {
+    "status": "subscribed",
+    "topic": "/sys/speech/mic_denoise"
+  }
+}
+```
+
+可订阅 topic：
+
+| topic | 说明 |
+|---|---|
+| `/sys/speech/mic_source` | 原始 8 通道 16kHz 麦克风数据 |
+| `/sys/speech/mic_denoise` | 降噪后 1 通道 16kHz 麦克风数据 |
+
+### 取消麦克风订阅
+
+请求：
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 202,
+  "method": "mic.unsubscribe",
+  "params": {
+    "topic": "/sys/speech/mic_denoise"
+  }
+}
+```
+
+成功响应：
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 202,
+  "result": {
+    "status": "unsubscribed",
+    "topic": "/sys/speech/mic_denoise"
+  }
+}
+```
+
+## 录音协议
+
+### 自动录音
+
+服务启动后，首次收到 `/sys/speech/mic_denoise` 数据会触发一次自动录音：
+
+1. 收到第一条麦克风数据
+2. 延迟 10 秒
+3. 开始写入 WAV 文件
+4. 录制 25 秒
+5. 自动停止并关闭文件
+
+日志示例：
+```text
+Received mic data from /sys/speech/mic_denoise: count=1 samples=...
+Auto mic recording started: path=recordings/20260513_193000_sys_speech_mic_denoise.wav duration=25s
+Auto mic recording stopped: path=recordings/20260513_193000_sys_speech_mic_denoise.wav
+```
+
+### 手动开始录音
+
+请求：
+```json
+{"jsonrpc": "2.0", "id": 301, "method": "mic.record_start", "params": {}}
+```
+
+成功响应：
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 301,
+  "result": {
+    "active": true,
+    "path": "recordings/20260513_193000_sys_speech_mic_denoise.wav",
+    "topic": "/sys/speech/mic_denoise",
+    "channels": 1,
+    "sample_rate": 16000,
+    "frames_written": 0,
+    "duration_sec": 0.0,
+    "started_at": "2026-05-13T19:30:00.000000"
+  }
+}
+```
+
+### 查看录音状态
+
+请求：
+```json
+{"jsonrpc": "2.0", "id": 302, "method": "mic.record_status", "params": {}}
+```
+
+成功响应：
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 302,
+  "result": {
+    "active": true,
+    "path": "recordings/20260513_193000_sys_speech_mic_denoise.wav",
+    "topic": "/sys/speech/mic_denoise",
+    "channels": 1,
+    "sample_rate": 16000,
+    "frames_written": 16000,
+    "duration_sec": 1.0,
+    "started_at": "2026-05-13T19:30:00.000000"
+  }
+}
+```
+
+### 停止录音
+
+请求：
+```json
+{"jsonrpc": "2.0", "id": 303, "method": "mic.record_stop", "params": {}}
+```
+
+成功响应：
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 303,
+  "result": {
+    "active": true,
+    "path": "recordings/20260513_193000_sys_speech_mic_denoise.wav",
+    "topic": "/sys/speech/mic_denoise",
+    "channels": 1,
+    "sample_rate": 16000,
+    "frames_written": 400000,
+    "duration_sec": 25.0,
+    "started_at": "2026-05-13T19:30:00.000000"
+  }
+}
+```
+
+录音文件说明：
+
+| 字段 | 值 |
+|---|---|
+| 保存目录 | `recordings/` |
+| 文件名 | `YYYYMMDD_HHMMSS_sys_speech_mic_denoise.wav` |
+| 格式 | WAV |
+| 编码 | PCM S16LE |
+| 采样率 | 16000 Hz |
+| 通道数 | 1 |
+
+### 开始/结束录音 Demo
+
+完整示例见 `examples/client_record_mic.py`。
+
+启动桥服务后，在另一个终端运行：
+
+```bash
+python3 examples/client_record_mic.py --uri ws://localhost:8765 --duration 25
+```
+
+核心调用逻辑如下：
+
+```python
+import asyncio
+import json
+
+import websockets
+
+
+async def call(ws, request):
+    await ws.send(json.dumps(request, ensure_ascii=False))
+    raw = await ws.recv()
+    print(raw)
+    return json.loads(raw)
+
+
+async def main():
+    async with websockets.connect("ws://127.0.0.1:8765") as ws:
+        await call(ws, {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "mic.record_start",
+            "params": {}
+        })
+
+        await asyncio.sleep(25)
+
+        await call(ws, {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "mic.record_stop",
+            "params": {}
+        })
+
+
+asyncio.run(main())
+```
+
+也可以在录音过程中查询状态：
+
+```json
+{"jsonrpc": "2.0", "id": 3, "method": "mic.record_status", "params": {}}
 ```
 
 **请求示例：**

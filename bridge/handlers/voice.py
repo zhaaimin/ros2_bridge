@@ -157,9 +157,9 @@ def setup_default_mic_subscription(adapter: Ros2Adapter, server: BridgeServer, l
                 received_count,
                 len(msg.data),
             )
-        if not auto_record_scheduled:
-            auto_record_scheduled = True
-            asyncio.run_coroutine_threadsafe(_auto_record_once(), loop)
+        # if not auto_record_scheduled:
+        #     auto_record_scheduled = True
+        #     asyncio.run_coroutine_threadsafe(_auto_record_once(), loop)
         _RECORDER.write_msg(_DEFAULT_MIC_TOPIC, msg)
         if not server.has_connections():
             return
@@ -183,17 +183,26 @@ async def mic_record_start(params: dict, adapter: Ros2Adapter, **kwargs: Any) ->
     topic: str = params.get("topic", _DEFAULT_MIC_TOPIC)
     if topic != _DEFAULT_MIC_TOPIC:
         raise ValueError(f"recording topic must be {_DEFAULT_MIC_TOPIC!r}")
-    return _RECORDER.start(
+    status = _RECORDER.start(
         topic=topic,
         channels=_MIC_CHANNELS[topic],
         sample_rate=int(params.get("sample_rate", _MIC_SAMPLE_RATE)),
     )
+    logger.info("Manual mic recording started: path=%s", status["path"])
+    return status
 
 
 @register("mic.record_stop")
 async def mic_record_stop(params: dict, adapter: Ros2Adapter, **kwargs: Any) -> Any:
     """停止保存麦克风 WAV 文件。"""
-    return _RECORDER.stop()
+    status = _RECORDER.stop()
+    logger.info(
+        "Manual mic recording stopped: path=%s duration=%.3fs frames=%d",
+        status["path"],
+        status["duration_sec"],
+        status["frames_written"],
+    )
+    return status
 
 
 @register("mic.record_status")
