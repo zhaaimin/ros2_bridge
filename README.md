@@ -94,8 +94,7 @@ async def greet(params: dict, adapter) -> Any:
 - 收到 `emb_task_msgs/msg/BatteryState` 后，会向所有在线 WebSocket 连接广播 `battery_state.data` 通知
 - 桥启动后会默认订阅 `/sys/speech/mic_denoise`
 - 收到 `std_msgs/msg/Int16MultiArray` 后，会向所有在线 WebSocket 连接广播 `mic.data` 通知
-- 首次收到 `/sys/speech/mic_denoise` 数据后，会延迟 10 秒自动开始录音，并在 25 秒后自动停止
-- 自动录音文件保存到 `recordings/`，格式为 16kHz、单通道、int16 PCM WAV
+- 录音需要通过 `mic.record_start` / `mic.record_stop` 手动控制
 
 **电池通知示例：**
 ```json
@@ -286,22 +285,7 @@ async def greet(params: dict, adapter) -> Any:
 
 ## 录音协议
 
-### 自动录音
-
-服务启动后，首次收到 `/sys/speech/mic_denoise` 数据会触发一次自动录音：
-
-1. 收到第一条麦克风数据
-2. 延迟 10 秒
-3. 开始写入 WAV 文件
-4. 录制 25 秒
-5. 自动停止并关闭文件
-
-日志示例：
-```text
-Received mic data from /sys/speech/mic_denoise: count=1 samples=...
-Auto mic recording started: path=recordings/20260513_193000_sys_speech_mic_denoise.wav duration=25s
-Auto mic recording stopped: path=recordings/20260513_193000_sys_speech_mic_denoise.wav
-```
+录音功能保存默认降噪麦克风数据 `/sys/speech/mic_denoise`，需要通过 JSON-RPC 接口手动开始和停止。
 
 ### 手动开始录音
 
@@ -443,20 +427,6 @@ asyncio.run(main())
 {"jsonrpc": "2.0", "id": 3, "method": "mic.record_status", "params": {}}
 ```
 
-**请求示例：**
-```json
-{"jsonrpc": "2.0", "id": 1, "method": "robotinfo.get_info", "params": {"client": "app"}}
-```
-
-**成功响应：**
-```json
-{"jsonrpc": "2.0", "id": 1, "result": {"model": "WalkerS2", "sn": "...", "version": "..."}}
-```
-
-**错误响应：**
-```json
-{"jsonrpc": "2.0", "id": 1, "error": {"code": -32000, "message": "..."}}
-```
 
 ## 错误码
 

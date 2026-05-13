@@ -1,0 +1,24 @@
+# Python cache / build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local editor / OS files
+.DS_Store
+.idea/
+
+# ROS / colcon local outputs
+install/
+log/
+
+# Local runtime artifacts
+run_bridge.sh
+recordings/
+*.wav

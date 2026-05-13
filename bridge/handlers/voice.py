@@ -31,8 +31,6 @@ _MIC_CHANNELS = {
     _TOPIC_MIC_SOURCE: 8,
     _TOPIC_MIC_DENOISE: 1,
 }
-_AUTO_RECORD_DELAY_SEC = 10
-_AUTO_RECORD_DURATION_SEC = 25
 _RECORDER = WavRecorder()
 
 
@@ -121,34 +119,9 @@ def _int16_multiarray_to_dict(msg: Int16MultiArray) -> dict:
 def setup_default_mic_subscription(adapter: Ros2Adapter, server: BridgeServer, loop) -> None:
     """桥启动时默认订阅降噪麦克风数据，并向全部在线连接广播。"""
     received_count = 0
-    auto_record_scheduled = False
-
-    async def _auto_record_once() -> None:
-        await asyncio.sleep(_AUTO_RECORD_DELAY_SEC)
-        try:
-            started = _RECORDER.start(
-                topic=_DEFAULT_MIC_TOPIC,
-                channels=_MIC_CHANNELS[_DEFAULT_MIC_TOPIC],
-                sample_rate=_MIC_SAMPLE_RATE,
-            )
-            logger.info(
-                "Auto mic recording started: path=%s duration=%ss",
-                started["path"],
-                _AUTO_RECORD_DURATION_SEC,
-            )
-        except Exception as exc:
-            logger.warning("Auto mic recording start skipped: %s", exc)
-            return
-
-        await asyncio.sleep(_AUTO_RECORD_DURATION_SEC)
-        try:
-            stopped = _RECORDER.stop()
-            logger.info("Auto mic recording stopped: path=%s", stopped["path"])
-        except Exception as exc:
-            logger.warning("Auto mic recording stop skipped: %s", exc)
 
     def _on_msg(msg: Int16MultiArray) -> None:
-        nonlocal auto_record_scheduled, received_count
+        nonlocal received_count
         received_count += 1
         if received_count == 1 or received_count % 100 == 0:
             logger.info(
@@ -157,9 +130,7 @@ def setup_default_mic_subscription(adapter: Ros2Adapter, server: BridgeServer, l
                 received_count,
                 len(msg.data),
             )
-        # if not auto_record_scheduled:
-        #     auto_record_scheduled = True
-        #     asyncio.run_coroutine_threadsafe(_auto_record_once(), loop)
+
         _RECORDER.write_msg(_DEFAULT_MIC_TOPIC, msg)
         if not server.has_connections():
             return
