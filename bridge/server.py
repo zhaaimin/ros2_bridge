@@ -49,6 +49,10 @@ class BridgeServer:
         if websocket in self._ws_topics:
             self._ws_topics[websocket].discard(topic_name)
 
+    def has_connections(self) -> bool:
+        """是否存在在线 WebSocket 连接。"""
+        return bool(self._connections)
+
     async def push_to(self, websocket: WebSocketServerProtocol, data: dict) -> None:
         """向指定 WebSocket 连接推送 JSON-RPC notification。"""
         try:

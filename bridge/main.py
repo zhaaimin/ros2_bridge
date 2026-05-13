@@ -12,6 +12,7 @@ import logging
 import sys
 
 from bridge.handlers.battery import setup_default_battery_subscription
+from bridge.handlers.voice import setup_default_mic_subscription
 from bridge.ros2_adapter import Ros2Adapter
 from bridge.server import BridgeServer
 
@@ -44,6 +45,7 @@ async def _main(host: str, port: int) -> None:
     logger.info("ROS2 node ready")
     server = BridgeServer(adapter)
     setup_default_battery_subscription(adapter, server, loop)
+    setup_default_mic_subscription(adapter, server, loop)
     await server.serve(host, port)
 
 
