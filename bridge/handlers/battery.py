@@ -4,6 +4,7 @@ import asyncio
 import logging
 
 from emb_task_msgs.msg import BatteryInfo, BatteryState
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 
 from bridge.ros2_adapter import Ros2Adapter
@@ -18,6 +19,7 @@ _BATTERY_QOS = QoSProfile(
     reliability=ReliabilityPolicy.BEST_EFFORT,
     durability=DurabilityPolicy.VOLATILE,
 )
+_BATTERY_CALLBACK_GROUP = ReentrantCallbackGroup()
 
 
 def _battery_info_to_dict(msg: BatteryInfo) -> dict:
@@ -62,5 +64,11 @@ def setup_default_battery_subscription(adapter: Ros2Adapter, server: BridgeServe
         }
         asyncio.run_coroutine_threadsafe(server.broadcast(notification), loop)
 
-    adapter.subscribe_topic(BatteryState, _TOPIC_BATTERY_STATE, _on_msg, _BATTERY_QOS)
+    adapter.subscribe_topic(
+        BatteryState,
+        _TOPIC_BATTERY_STATE,
+        _on_msg,
+        _BATTERY_QOS,
+        callback_group=_BATTERY_CALLBACK_GROUP,
+    )
     logger.info("Default subscribed to battery topic: %s", _TOPIC_BATTERY_STATE)

@@ -4,7 +4,9 @@ import asyncio
 import logging
 from typing import Any
 
+from rclpy.callback_groups import ReentrantCallbackGroup
 from std_msgs.msg import Int16MultiArray
+from sys_task_msgs.action import Tts
 
 from bridge.audio_recorder import WavRecorder
 from bridge.dispatcher import register
@@ -13,10 +15,7 @@ from bridge.server import BridgeServer
 
 logger = logging.getLogger(__name__)
 
-# TODO: 替换为实际 ROS2 service/action 消息类型，例如：
-# from walker_voice_msgs.srv import Speak, StopSpeak, SetVolume, SetSystemVolume
-
-_SRV_SPEAK = "/walker/voice/speak"
+_ACTION_TTS = "/sys/speech/tts"
 _SRV_STOP = "/walker/voice/stop"
 _SRV_SET_VOLUME = "/walker/voice/set_volume"
 _SRV_SET_SYSTEM_VOLUME = "/walker/voice/set_system_volume"
@@ -31,25 +30,65 @@ _MIC_CHANNELS = {
     _TOPIC_MIC_SOURCE: 8,
     _TOPIC_MIC_DENOISE: 1,
 }
+_MIC_CALLBACK_GROUP = ReentrantCallbackGroup()
 _RECORDER = WavRecorder()
+
+
+def _node_state_to_dict(msg) -> dict:
+    header = getattr(msg, "header", None)
+    stamp = getattr(header, "stamp", None)
+    return {
+        "header": {
+            "stamp": {
+                "sec": getattr(stamp, "sec", 0),
+                "nanosec": getattr(stamp, "nanosec", 0),
+            },
+            "frame_id": getattr(header, "frame_id", ""),
+        },
+        "state": getattr(msg, "state", 0),
+        "desc": getattr(msg, "desc", ""),
+        "msg_type": getattr(msg, "msg_type", ""),
+    }
 
 
 @register("voice.speak")
 async def speak(params: dict, adapter: Ros2Adapter, **kwargs: Any) -> Any:
-    text: str = params["text"]
-    speed: int = params.get("speed", 50)
-    volume: int = params.get("volume", 60)
+    """通过 /sys/speech/tts action 播放 TTS 文本或音频文件。"""
+    goal = Tts.Goal()
 
-    # TODO: 替换下方注释为实际 ROS2 调用：
-    # from walker_voice_msgs.srv import Speak
-    # req = Speak.Request()
-    # req.text = text
-    # req.speed = speed
-    # req.volume = volume
-    # ros_result = await adapter.call_service(Speak, _SRV_SPEAK, req)
-    # return "accept" if ros_result.success else _fail(ros_result.message)
+    play_type = params.get("type", "tts")
+    if isinstance(play_type, str):
+        play_type = play_type.lower()
+        if play_type == "tts":
+            goal.type = Tts.Goal.TTS
+        elif play_type == "file":
+            goal.type = Tts.Goal.FILE
+        else:
+            raise ValueError("params.type must be 'tts' or 'file'")
+    else:
+        goal.type = int(play_type)
 
-    raise NotImplementedError("voice.speak: fill in ROS2 service type and call")
+    goal.is_break = bool(params.get("is_break", True))
+
+    if goal.type == Tts.Goal.FILE:
+        goal.file_path = params["file_path"]
+    else:
+        goal.text = params["text"]
+
+    goal.speaker = params.get("speaker", "male_01")
+    goal.speed = int(params.get("speed", 50))
+    goal.volume = int(params.get("volume", 100))
+    goal.pitch = int(params.get("pitch", 50))
+    goal.language = params.get("language", "zh")
+    goal.format = params.get("format", "wav")
+    goal.need_save = bool(params.get("need_save", True))
+
+    result = await adapter.send_action_goal(Tts, _ACTION_TTS, goal)
+    logger.info("TTS action finished: %s", result.result)
+    return {
+        "action": _ACTION_TTS,
+        "result": _node_state_to_dict(result.result),
+    }
 
 
 @register("voice.stop")
@@ -144,7 +183,12 @@ def setup_default_mic_subscription(adapter: Ros2Adapter, server: BridgeServer, l
         }
         asyncio.run_coroutine_threadsafe(server.broadcast(notification), loop)
 
-    adapter.subscribe_topic(Int16MultiArray, _DEFAULT_MIC_TOPIC, _on_msg)
+    adapter.subscribe_topic(
+        Int16MultiArray,
+        _DEFAULT_MIC_TOPIC,
+        _on_msg,
+        callback_group=_MIC_CALLBACK_GROUP,
+    )
     logger.info("Default subscribed to mic topic: %s", _DEFAULT_MIC_TOPIC)
 
 
