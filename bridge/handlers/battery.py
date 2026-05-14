@@ -4,7 +4,7 @@ import asyncio
 import logging
 
 from emb_task_msgs.msg import BatteryInfo, BatteryState
-from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 
 from bridge.ros2_adapter import Ros2Adapter
@@ -19,7 +19,7 @@ _BATTERY_QOS = QoSProfile(
     reliability=ReliabilityPolicy.BEST_EFFORT,
     durability=DurabilityPolicy.VOLATILE,
 )
-_BATTERY_CALLBACK_GROUP = ReentrantCallbackGroup()
+_BATTERY_CALLBACK_GROUP = MutuallyExclusiveCallbackGroup()
 
 
 def _battery_info_to_dict(msg: BatteryInfo) -> dict:

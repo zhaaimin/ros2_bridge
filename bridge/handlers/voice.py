@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+import threading
+from collections import deque
+from typing import Any, Deque, Tuple
 
-from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from std_msgs.msg import Int16MultiArray
 from sys_task_msgs.action import Tts
 
@@ -30,7 +32,8 @@ _MIC_CHANNELS = {
     _TOPIC_MIC_SOURCE: 8,
     _TOPIC_MIC_DENOISE: 1,
 }
-_MIC_CALLBACK_GROUP = ReentrantCallbackGroup()
+_MIC_CALLBACK_GROUP = MutuallyExclusiveCallbackGroup()
+_MIC_QUEUE_MAXLEN = 10
 _RECORDER = WavRecorder()
 
 
@@ -158,9 +161,50 @@ def _int16_multiarray_to_dict(msg: Int16MultiArray) -> dict:
 def setup_default_mic_subscription(adapter: Ros2Adapter, server: BridgeServer, loop) -> None:
     """桥启动时默认订阅降噪麦克风数据，并向全部在线连接广播。"""
     received_count = 0
+    next_seq = 0
+    dropped_count = 0
+    mic_queue: Deque[Tuple[int, Int16MultiArray, int]] = deque(maxlen=_MIC_QUEUE_MAXLEN)
+    queue_lock = threading.Lock()
+
+    async def _push_queued_mic_data() -> None:
+        while True:
+            await asyncio.sleep(0)
+            if not server.has_connections():
+                with queue_lock:
+                    mic_queue.clear()
+                await asyncio.sleep(0.02)
+                continue
+            with queue_lock:
+                if not mic_queue:
+                    item = None
+                else:
+                    item = mic_queue.popleft()
+            if item is None:
+                await asyncio.sleep(0.005)
+                continue
+            seq, msg, dropped_before = item
+            with queue_lock:
+                queued_count = len(mic_queue)
+            notification = {
+                "jsonrpc": "2.0",
+                "method": "mic.data",
+                "params": {
+                    "topic": _DEFAULT_MIC_TOPIC,
+                    "seq": seq,
+                    "dropped_count": dropped_before,
+                    "queued_count": queued_count,
+                    **_int16_multiarray_to_dict(msg),
+                },
+            }
+            try:
+                await server.broadcast(notification)
+            except Exception:
+                logger.exception("Failed to broadcast mic data")
+
+    asyncio.run_coroutine_threadsafe(_push_queued_mic_data(), loop)
 
     def _on_msg(msg: Int16MultiArray) -> None:
-        nonlocal received_count
+        nonlocal dropped_count, next_seq, received_count
         received_count += 1
         if received_count == 1 or received_count % 100 == 0:
             logger.info(
@@ -171,17 +215,11 @@ def setup_default_mic_subscription(adapter: Ros2Adapter, server: BridgeServer, l
             )
 
         _RECORDER.write_msg(_DEFAULT_MIC_TOPIC, msg)
-        if not server.has_connections():
-            return
-        notification = {
-            "jsonrpc": "2.0",
-            "method": "mic.data",
-            "params": {
-                "topic": _DEFAULT_MIC_TOPIC,
-                **_int16_multiarray_to_dict(msg),
-            },
-        }
-        asyncio.run_coroutine_threadsafe(server.broadcast(notification), loop)
+        with queue_lock:
+            if len(mic_queue) == mic_queue.maxlen:
+                dropped_count += 1
+            mic_queue.append((next_seq, msg, dropped_count))
+            next_seq += 1
 
     adapter.subscribe_topic(
         Int16MultiArray,
