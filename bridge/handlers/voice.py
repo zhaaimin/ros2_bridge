@@ -7,6 +7,7 @@ from collections import deque
 from typing import Any, Deque, Tuple
 
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Int16MultiArray
 from sys_task_msgs.action import Tts
 
@@ -34,6 +35,12 @@ _MIC_CHANNELS = {
 }
 _MIC_CALLBACK_GROUP = MutuallyExclusiveCallbackGroup()
 _MIC_QUEUE_MAXLEN = 10
+_MIC_QOS = QoSProfile(
+    history=HistoryPolicy.KEEP_LAST,
+    depth=_MIC_QUEUE_MAXLEN,
+    reliability=ReliabilityPolicy.BEST_EFFORT,
+    durability=DurabilityPolicy.VOLATILE,
+)
 _RECORDER = WavRecorder()
 
 
@@ -169,7 +176,7 @@ def setup_default_mic_subscription(adapter: Ros2Adapter, server: BridgeServer, l
     async def _push_queued_mic_data() -> None:
         while True:
             await asyncio.sleep(0)
-            if not server.has_connections():
+            if not server.has_topic_subscribers(_DEFAULT_MIC_TOPIC):
                 with queue_lock:
                     mic_queue.clear()
                 await asyncio.sleep(0.02)
@@ -185,6 +192,13 @@ def setup_default_mic_subscription(adapter: Ros2Adapter, server: BridgeServer, l
             seq, msg, dropped_before = item
             with queue_lock:
                 queued_count = len(mic_queue)
+            if seq == 0 or seq % 100 == 0:
+                logger.info(
+                    "Queueing mic push: seq=%d queued=%d dropped=%d",
+                    seq,
+                    queued_count,
+                    dropped_before,
+                )
             notification = {
                 "jsonrpc": "2.0",
                 "method": "mic.data",
@@ -197,7 +211,7 @@ def setup_default_mic_subscription(adapter: Ros2Adapter, server: BridgeServer, l
                 },
             }
             try:
-                await server.broadcast(notification)
+                await server.broadcast_topic(_DEFAULT_MIC_TOPIC, notification)
             except Exception:
                 logger.exception("Failed to broadcast mic data")
 
@@ -225,8 +239,10 @@ def setup_default_mic_subscription(adapter: Ros2Adapter, server: BridgeServer, l
         Int16MultiArray,
         _DEFAULT_MIC_TOPIC,
         _on_msg,
+        _MIC_QOS,
         callback_group=_MIC_CALLBACK_GROUP,
     )
+    server.mark_persistent_topic(_DEFAULT_MIC_TOPIC)
     logger.info("Default subscribed to mic topic: %s", _DEFAULT_MIC_TOPIC)
 
 
@@ -285,8 +301,13 @@ async def mic_subscribe(params: dict, adapter: Ros2Adapter, **kwargs: Any) -> An
         )
 
     loop = asyncio.get_running_loop()
+    pushed_count = 0
 
     def _on_msg(msg: Int16MultiArray) -> None:
+        nonlocal pushed_count
+        if not server.has_topic_subscribers(topic):
+            return
+        pushed_count += 1
         notification = {
             "jsonrpc": "2.0",
             "method": "mic.data",
@@ -295,9 +316,12 @@ async def mic_subscribe(params: dict, adapter: Ros2Adapter, **kwargs: Any) -> An
                 **_int16_multiarray_to_dict(msg),
             },
         }
-        asyncio.run_coroutine_threadsafe(server.push_to(websocket, notification), loop)
+        if pushed_count == 1 or pushed_count % 100 == 0:
+            logger.info("Pushing mic topic %s: count=%d", topic, pushed_count)
+        asyncio.run_coroutine_threadsafe(server.broadcast_topic(topic, notification), loop)
 
-    adapter.subscribe_topic(Int16MultiArray, topic, _on_msg)
+    if topic != _DEFAULT_MIC_TOPIC:
+        adapter.subscribe_topic(Int16MultiArray, topic, _on_msg, _MIC_QOS)
     server.track_topic(websocket, topic)
     logger.info("Client subscribed to mic topic: %s", topic)
     return {"status": "subscribed", "topic": topic}
@@ -321,8 +345,9 @@ async def mic_unsubscribe(params: dict, adapter: Ros2Adapter, **kwargs: Any) -> 
             f"Invalid topic: {topic!r}, must be one of {sorted(_VALID_MIC_TOPICS)}"
         )
 
-    adapter.unsubscribe_topic(topic)
     server.untrack_topic(websocket, topic)
+    if topic != _DEFAULT_MIC_TOPIC and not server.has_topic_subscribers(topic):
+        adapter.unsubscribe_topic(topic)
     logger.info("Client unsubscribed from mic topic: %s", topic)
     return {"status": "unsubscribed", "topic": topic}
 

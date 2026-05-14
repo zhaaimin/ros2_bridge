@@ -28,6 +28,7 @@ logging.basicConfig(
 logger = logging.getLogger("record_mic_demo")
 
 _REQ_ID = 0
+_MIC_TOPIC = "/sys/speech/mic_denoise"
 
 
 def _next_id() -> int:
@@ -36,25 +37,55 @@ def _next_id() -> int:
     return _REQ_ID
 
 
-async def call_rpc(ws, method: str, params: dict[str, Any] | None = None) -> dict:
+async def read_messages(ws, pending: dict[int, asyncio.Future], stats: dict[str, Any]) -> None:
+    async for resp_raw in ws:
+        msg = json.loads(resp_raw)
+        if "id" in msg:
+            future = pending.pop(msg["id"], None)
+            if future is not None and not future.done():
+                future.set_result(msg)
+            else:
+                logger.info("<- unmatched response: %s", json.dumps(msg, ensure_ascii=False))
+            continue
+
+        if msg.get("method") == "mic.data":
+            params = msg.get("params") or {}
+            stats["mic_frames"] += 1
+            stats["last_seq"] = params.get("seq")
+            stats["dropped_count"] = params.get("dropped_count", 0)
+            if stats["mic_frames"] == 1 or stats["mic_frames"] % 100 == 0:
+                logger.info(
+                    "<- mic.data frames=%d seq=%s dropped=%s samples=%d",
+                    stats["mic_frames"],
+                    stats["last_seq"],
+                    stats["dropped_count"],
+                    len(params.get("data", [])),
+                )
+        else:
+            logger.info("<- notification: %s", json.dumps(msg, ensure_ascii=False))
+
+
+async def call_rpc(
+    ws,
+    pending: dict[int, asyncio.Future],
+    method: str,
+    params: dict[str, Any] | None = None,
+) -> dict:
+    req_id = _next_id()
     request = {
         "jsonrpc": "2.0",
-        "id": _next_id(),
+        "id": req_id,
         "method": method,
         "params": params or {},
     }
     raw = json.dumps(request, ensure_ascii=False)
     logger.info("-> %s", raw)
+    future = asyncio.get_running_loop().create_future()
+    pending[req_id] = future
     await ws.send(raw)
-
-    while True:
-        resp_raw = await ws.recv()
-        resp = json.loads(resp_raw)
-        if "id" not in resp:
-            logger.info("<- notification: %s", json.dumps(resp, ensure_ascii=False))
-            continue
-        logger.info("<- %s", json.dumps(resp, ensure_ascii=False))
-        return resp
+    resp = await future
+    logger.info("<- %s", json.dumps(resp, ensure_ascii=False))
+    return resp
 
 
 def _require_result(resp: dict, method: str) -> dict:
@@ -66,31 +97,59 @@ def _require_result(resp: dict, method: str) -> dict:
 async def main(uri: str, duration: float) -> None:
     async with websockets.connect(uri) as ws:
         logger.info("Connected to %s", uri)
+        pending: dict[int, asyncio.Future] = {}
+        stats: dict[str, Any] = {
+            "mic_frames": 0,
+            "last_seq": None,
+            "dropped_count": 0,
+        }
+        reader = asyncio.create_task(read_messages(ws, pending, stats))
 
-        start = _require_result(
-            await call_rpc(ws, "mic.record_start"),
-            "mic.record_start",
-        )
-        print(f"Recording started: {start.get('path')}")
+        try:
+            subscribed = _require_result(
+                await call_rpc(ws, pending, "mic.subscribe", {"topic": _MIC_TOPIC}),
+                "mic.subscribe",
+            )
+            print(f"Subscribed mic topic: {subscribed.get('topic')}")
 
-        await asyncio.sleep(duration)
+            start = _require_result(
+                await call_rpc(ws, pending, "mic.record_start"),
+                "mic.record_start",
+            )
+            print(f"Recording started: {start.get('path')}")
 
-        status = _require_result(
-            await call_rpc(ws, "mic.record_status"),
-            "mic.record_status",
-        )
-        print(
-            "Recording status: "
-            f"duration={status.get('duration_sec')}s "
-            f"frames={status.get('frames_written')}"
-        )
+            await asyncio.sleep(duration)
 
-        stop = _require_result(
-            await call_rpc(ws, "mic.record_stop"),
-            "mic.record_stop",
-        )
-        print(f"Recording stopped: {stop.get('path')}")
-        print(f"Saved WAV duration: {stop.get('duration_sec')}s")
+            # status = _require_result(
+            #     await call_rpc(ws, pending, "mic.record_status"),
+            #     "mic.record_status",
+            # )
+            # print(
+            #     "Recording status: "
+            #     f"duration={status.get('duration_sec')}s "
+            #     f"frames={status.get('frames_written')}"
+            # )
+
+            stop = _require_result(
+                await call_rpc(ws, pending, "mic.record_stop"),
+                "mic.record_stop",
+            )
+            print(f"Recording stopped: {stop.get('path')}")
+            print(f"Saved WAV duration: {stop.get('duration_sec')}s")
+            print(
+                "Received mic notifications: "
+                f"frames={stats['mic_frames']} "
+                f"last_seq={stats['last_seq']} "
+                f"dropped={stats['dropped_count']}"
+            )
+
+            _require_result(
+                await call_rpc(ws, pending, "mic.unsubscribe", {"topic": _MIC_TOPIC}),
+                "mic.unsubscribe",
+            )
+            print(f"Unsubscribed mic topic: {_MIC_TOPIC}")
+        finally:
+            reader.cancel()
 
 
 if __name__ == "__main__":
