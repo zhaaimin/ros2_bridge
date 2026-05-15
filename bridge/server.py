@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Dict, Set
+from typing import Dict, Optional, Set
 
 import websockets
 from websockets.server import WebSocketServerProtocol
@@ -34,6 +34,7 @@ class BridgeServer:
             pass
         finally:
             session = self._clients.pop(websocket, session)
+            await session.cleanup()
             session.close()
             topics = set(session.topics)
             for topic in topics:
@@ -44,6 +45,15 @@ class BridgeServer:
     def mark_persistent_topic(self, topic_name: str) -> None:
         """标记由服务维护的常驻 ROS topic，客户端断开时不销毁订阅。"""
         self._persistent_topics.add(topic_name)
+
+    def get_session(self, websocket: WebSocketServerProtocol) -> Optional[ClientSession]:
+        """获取指定 WebSocket 对应的客户端会话。"""
+        return self._clients.get(websocket)
+
+    def remove_cleanup_from_all_sessions(self, name: str) -> None:
+        """从所有在线客户端移除指定断连清理动作。"""
+        for session in self._clients.values():
+            session.remove_cleanup(name)
 
     def track_topic(self, websocket: WebSocketServerProtocol, topic_name: str) -> None:
         """记录某个 WebSocket 连接正在订阅的 topic，断连时自动清理。"""

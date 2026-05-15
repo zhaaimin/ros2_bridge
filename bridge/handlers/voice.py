@@ -42,6 +42,7 @@ _MIC_QOS = QoSProfile(
     durability=DurabilityPolicy.VOLATILE,
 )
 _RECORDER = WavRecorder()
+_RECORDER_CLEANUP_NAME = "mic_recording"
 
 
 def _node_state_to_dict(msg) -> dict:
@@ -246,27 +247,90 @@ def setup_default_mic_subscription(adapter: Ros2Adapter, server: BridgeServer, l
     logger.info("Default subscribed to mic topic: %s", _DEFAULT_MIC_TOPIC)
 
 
+def _stop_recording_on_session_cleanup(peer: Any) -> None:
+    if not _RECORDER.status()["active"]:
+        return
+
+    status = _RECORDER.stop()
+    logger.info(
+        "Mic recording owner disconnected, auto stopped recording: "
+        "client=%s path=%s duration=%.3fs frames=%d",
+        peer,
+        status["path"],
+        status["duration_sec"],
+        status["frames_written"],
+    )
+
+
 @register("mic.record_start")
 async def mic_record_start(params: dict, adapter: Ros2Adapter, **kwargs: Any) -> Any:
     """开始保存默认降噪麦克风数据为 WAV 文件。"""
     topic: str = params.get("topic", _DEFAULT_MIC_TOPIC)
     if topic != _DEFAULT_MIC_TOPIC:
         raise ValueError(f"recording topic must be {_DEFAULT_MIC_TOPIC!r}")
+    server = kwargs.get("server")
+    websocket = kwargs.get("websocket")
+    session = server.get_session(websocket) if server is not None and websocket is not None else None
+    auto_stop_on_disconnect = bool(params.get("auto_stop_on_disconnect", True))
+
     status = _RECORDER.start(
         topic=topic,
         channels=_MIC_CHANNELS[topic],
         sample_rate=int(params.get("sample_rate", _MIC_SAMPLE_RATE)),
     )
-    logger.info("Manual mic recording started: path=%s", status["path"])
+    if auto_stop_on_disconnect and session is not None:
+        peer = session.peer
+        session.add_cleanup(
+            _RECORDER_CLEANUP_NAME,
+            lambda: _stop_recording_on_session_cleanup(peer),
+        )
+    logger.info(
+        "Manual mic recording started: path=%s auto_stop_on_disconnect=%s",
+        status["path"],
+        auto_stop_on_disconnect,
+    )
     return status
 
 
 @register("mic.record_stop")
 async def mic_record_stop(params: dict, adapter: Ros2Adapter, **kwargs: Any) -> Any:
     """停止保存麦克风 WAV 文件。"""
+    server = kwargs.get("server")
+    websocket = kwargs.get("websocket")
+    session = server.get_session(websocket) if server is not None and websocket is not None else None
     status = _RECORDER.stop()
+    if server is not None:
+        server.remove_cleanup_from_all_sessions(_RECORDER_CLEANUP_NAME)
+    elif session is not None:
+        session.remove_cleanup(_RECORDER_CLEANUP_NAME)
     logger.info(
         "Manual mic recording stopped: path=%s duration=%.3fs frames=%d",
+        status["path"],
+        status["duration_sec"],
+        status["frames_written"],
+    )
+    return status
+
+
+@register("mic.record_pause")
+async def mic_record_pause(params: dict, adapter: Ros2Adapter, **kwargs: Any) -> Any:
+    """暂停写入麦克风 WAV 文件，麦克风推送不受影响。"""
+    status = _RECORDER.pause()
+    logger.info(
+        "Manual mic recording paused: path=%s duration=%.3fs frames=%d",
+        status["path"],
+        status["duration_sec"],
+        status["frames_written"],
+    )
+    return status
+
+
+@register("mic.record_resume")
+async def mic_record_resume(params: dict, adapter: Ros2Adapter, **kwargs: Any) -> Any:
+    """继续写入麦克风 WAV 文件。"""
+    status = _RECORDER.resume()
+    logger.info(
+        "Manual mic recording resumed: path=%s duration=%.3fs frames=%d",
         status["path"],
         status["duration_sec"],
         status["frames_written"],

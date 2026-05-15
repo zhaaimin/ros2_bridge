@@ -21,6 +21,7 @@ class WavRecorder:
         self._sample_rate = 0
         self._frames_written = 0
         self._started_at: Optional[datetime] = None
+        self._paused = False
 
     def start(self, topic: str, channels: int, sample_rate: int) -> dict:
         with self._lock:
@@ -44,16 +45,31 @@ class WavRecorder:
             self._sample_rate = sample_rate
             self._frames_written = 0
             self._started_at = datetime.now()
+            self._paused = False
             return self.status()
 
     def write_msg(self, topic: str, msg: Any) -> None:
         with self._lock:
-            if self._wav is None or topic != self._topic:
+            if self._wav is None or self._paused or topic != self._topic:
                 return
             pcm = array.array("h", msg.data)
             self._wav.writeframes(pcm.tobytes())
             if self._channels > 0:
                 self._frames_written += len(pcm) // self._channels
+
+    def pause(self) -> dict:
+        with self._lock:
+            if self._wav is None:
+                raise RuntimeError("recording is not active")
+            self._paused = True
+            return self.status()
+
+    def resume(self) -> dict:
+        with self._lock:
+            if self._wav is None:
+                raise RuntimeError("recording is not active")
+            self._paused = False
+            return self.status()
 
     def stop(self) -> dict:
         with self._lock:
@@ -68,6 +84,7 @@ class WavRecorder:
             self._sample_rate = 0
             self._frames_written = 0
             self._started_at = None
+            self._paused = False
             return status
 
     def status(self) -> dict:
@@ -77,6 +94,7 @@ class WavRecorder:
             duration = self._frames_written / self._sample_rate
         return {
             "active": active,
+            "paused": self._paused if active else False,
             "path": str(self._path) if self._path is not None else None,
             "topic": self._topic,
             "channels": self._channels if active else None,

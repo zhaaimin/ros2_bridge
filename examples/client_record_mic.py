@@ -9,6 +9,7 @@
     # 再运行本客户端，默认录制 25 秒
     python3 examples/client_record_mic.py
     python3 examples/client_record_mic.py --uri ws://localhost:8765 --duration 10
+    python3 examples/client_record_mic.py --pause-after 5 --pause-duration 3
 """
 
 from __future__ import annotations
@@ -94,7 +95,7 @@ def _require_result(resp: dict, method: str) -> dict:
     return resp.get("result") or {}
 
 
-async def main(uri: str, duration: float) -> None:
+async def main(uri: str, duration: float, pause_after: float | None, pause_duration: float) -> None:
     async with websockets.connect(uri) as ws:
         logger.info("Connected to %s", uri)
         pending: dict[int, asyncio.Future] = {}
@@ -118,7 +119,23 @@ async def main(uri: str, duration: float) -> None:
             )
             print(f"Recording started: {start.get('path')}")
 
-            await asyncio.sleep(duration)
+            if pause_after is None:
+                await asyncio.sleep(duration)
+            else:
+                await asyncio.sleep(min(pause_after, duration))
+                if pause_after < duration:
+                    paused = _require_result(
+                        await call_rpc(ws, pending, "mic.record_pause"),
+                        "mic.record_pause",
+                    )
+                    print(f"Recording paused: duration={paused.get('duration_sec')}s")
+                    await asyncio.sleep(pause_duration)
+                    resumed = _require_result(
+                        await call_rpc(ws, pending, "mic.record_resume"),
+                        "mic.record_resume",
+                    )
+                    print(f"Recording resumed: duration={resumed.get('duration_sec')}s")
+                    await asyncio.sleep(duration - pause_after)
 
             # status = _require_result(
             #     await call_rpc(ws, pending, "mic.record_status"),
@@ -156,5 +173,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Record denoised mic audio through bridge")
     parser.add_argument("--uri", default="ws://localhost:8765", help="Bridge WebSocket URI")
     parser.add_argument("--duration", type=float, default=25.0, help="Recording duration in seconds")
+    parser.add_argument("--pause-after", type=float, default=None, help="Pause recording after N seconds")
+    parser.add_argument("--pause-duration", type=float, default=3.0, help="Pause duration in seconds")
     args = parser.parse_args()
-    asyncio.run(main(args.uri, args.duration))
+    asyncio.run(main(args.uri, args.duration, args.pause_after, args.pause_duration))

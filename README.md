@@ -285,13 +285,27 @@ async def greet(params: dict, adapter) -> Any:
 
 ## 录音协议
 
-录音功能保存默认降噪麦克风数据 `/sys/speech/mic_denoise`，需要通过 JSON-RPC 接口手动开始和停止。
+录音功能保存默认降噪麦克风数据 `/sys/speech/mic_denoise`，需要通过 JSON-RPC 接口手动开始、暂停、继续和停止。
+默认情况下，发起 `mic.record_start` 的 WebSocket 客户端断开连接时，服务端会自动停止录音并关闭 WAV 文件。
 
 ### 手动开始录音
 
 请求：
 ```json
 {"jsonrpc": "2.0", "id": 301, "method": "mic.record_start", "params": {}}
+```
+
+如果希望客户端断开后继续录音，可以显式关闭断连自动停止：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 301,
+  "method": "mic.record_start",
+  "params": {
+    "auto_stop_on_disconnect": false
+  }
+}
 ```
 
 成功响应：
@@ -301,6 +315,7 @@ async def greet(params: dict, adapter) -> Any:
   "id": 301,
   "result": {
     "active": true,
+    "paused": false,
     "path": "recordings/20260513_193000_sys_speech_mic_denoise.wav",
     "topic": "/sys/speech/mic_denoise",
     "channels": 1,
@@ -326,6 +341,61 @@ async def greet(params: dict, adapter) -> Any:
   "id": 302,
   "result": {
     "active": true,
+    "paused": false,
+    "path": "recordings/20260513_193000_sys_speech_mic_denoise.wav",
+    "topic": "/sys/speech/mic_denoise",
+    "channels": 1,
+    "sample_rate": 16000,
+    "frames_written": 16000,
+    "duration_sec": 1.0,
+    "started_at": "2026-05-13T19:30:00.000000"
+  }
+}
+```
+
+### 暂停录音
+
+暂停后服务端仍会接收麦克风数据，也会继续按客户端订阅推送 `mic.data`，但不会写入当前 WAV 文件。
+
+请求：
+```json
+{"jsonrpc": "2.0", "id": 303, "method": "mic.record_pause", "params": {}}
+```
+
+成功响应：
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 303,
+  "result": {
+    "active": true,
+    "paused": true,
+    "path": "recordings/20260513_193000_sys_speech_mic_denoise.wav",
+    "topic": "/sys/speech/mic_denoise",
+    "channels": 1,
+    "sample_rate": 16000,
+    "frames_written": 16000,
+    "duration_sec": 1.0,
+    "started_at": "2026-05-13T19:30:00.000000"
+  }
+}
+```
+
+### 继续录音
+
+请求：
+```json
+{"jsonrpc": "2.0", "id": 304, "method": "mic.record_resume", "params": {}}
+```
+
+成功响应：
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 304,
+  "result": {
+    "active": true,
+    "paused": false,
     "path": "recordings/20260513_193000_sys_speech_mic_denoise.wav",
     "topic": "/sys/speech/mic_denoise",
     "channels": 1,
@@ -341,16 +411,17 @@ async def greet(params: dict, adapter) -> Any:
 
 请求：
 ```json
-{"jsonrpc": "2.0", "id": 303, "method": "mic.record_stop", "params": {}}
+{"jsonrpc": "2.0", "id": 305, "method": "mic.record_stop", "params": {}}
 ```
 
 成功响应：
 ```json
 {
   "jsonrpc": "2.0",
-  "id": 303,
+  "id": 305,
   "result": {
     "active": true,
+    "paused": false,
     "path": "recordings/20260513_193000_sys_speech_mic_denoise.wav",
     "topic": "/sys/speech/mic_denoise",
     "channels": 1,
@@ -381,6 +452,7 @@ async def greet(params: dict, adapter) -> Any:
 
 ```bash
 python3 examples/client_record_mic.py --uri ws://localhost:8765 --duration 25
+python3 examples/client_record_mic.py --uri ws://localhost:8765 --duration 25 --pause-after 5 --pause-duration 3
 ```
 
 核心调用逻辑如下：
@@ -408,11 +480,29 @@ async def main():
             "params": {}
         })
 
-        await asyncio.sleep(25)
+        await asyncio.sleep(5)
 
         await call(ws, {
             "jsonrpc": "2.0",
             "id": 2,
+            "method": "mic.record_pause",
+            "params": {}
+        })
+
+        await asyncio.sleep(3)
+
+        await call(ws, {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "mic.record_resume",
+            "params": {}
+        })
+
+        await asyncio.sleep(20)
+
+        await call(ws, {
+            "jsonrpc": "2.0",
+            "id": 4,
             "method": "mic.record_stop",
             "params": {}
         })
@@ -424,7 +514,7 @@ asyncio.run(main())
 也可以在录音过程中查询状态：
 
 ```json
-{"jsonrpc": "2.0", "id": 3, "method": "mic.record_status", "params": {}}
+{"jsonrpc": "2.0", "id": 5, "method": "mic.record_status", "params": {}}
 ```
 
 

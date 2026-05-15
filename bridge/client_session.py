@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
-from typing import Optional, Set, Tuple
+from typing import Any, Callable, Dict, Optional, Set, Tuple
 
 from websockets.server import WebSocketServerProtocol
 
@@ -16,6 +17,7 @@ class ClientSession:
     def __init__(self, websocket: WebSocketServerProtocol, queue_maxsize: int = 64) -> None:
         self.websocket = websocket
         self.topics: Set[str] = set()
+        self._cleanups: Dict[str, Callable[[], Any]] = {}
         self._loop = asyncio.get_running_loop()
         self._send_lock = asyncio.Lock()
         self._queue: asyncio.Queue[Tuple[Optional[str], dict]] = asyncio.Queue(
@@ -35,6 +37,23 @@ class ClientSession:
 
     def is_subscribed(self, topic_name: str) -> bool:
         return topic_name in self.topics
+
+    def add_cleanup(self, name: str, cleanup: Callable[[], Any]) -> None:
+        self._cleanups[name] = cleanup
+
+    def remove_cleanup(self, name: str) -> None:
+        self._cleanups.pop(name, None)
+
+    async def cleanup(self) -> None:
+        cleanups = tuple(self._cleanups.items())
+        self._cleanups.clear()
+        for name, cleanup in cleanups:
+            try:
+                result = cleanup()
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                logger.exception("Client cleanup failed: peer=%s name=%s", self.peer, name)
 
     async def send(self, data: dict) -> None:
         async with self._send_lock:
